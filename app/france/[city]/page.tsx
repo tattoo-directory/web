@@ -63,7 +63,9 @@ export default async function CityPage({
       <ul style={{ marginTop: 24 }}>
         {(artists ?? []).map((a) => (
           <li key={a.id} style={{ marginBottom: 16 }}>
+            <Link href={`/france/${city}/${a.slug}`}>
             <div style={{ fontWeight: 600 }}>{a.name}</div>
+            </Link>
             <div style={{ opacity: 0.8, fontSize: 14 }}>
               {(a.style_slugs ?? []).join(" · ")}
             </div>
