@@ -7,6 +7,21 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+export const revalidate = 86400; // 24h (ISR)
+
+export async function generateStaticParams() {
+  const { data: artists } = await supabase
+    .from("artists")
+    .select("city_slug, slug")
+    .eq("country_code", "FR")
+    .eq("is_active", true);
+
+  return (artists ?? []).map((a) => ({
+    city: a.city_slug,
+    slug: a.slug,
+  }));
+}
+
 export async function generateMetadata({
   params,
 }: {
