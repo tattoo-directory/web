@@ -7,6 +7,28 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ city: string }>;
+}) {
+  const { city } = await params;
+
+  const { data: cityRow } = await supabase
+    .from("cities")
+    .select("name")
+    .eq("country_code", "FR")
+    .eq("slug", city)
+    .single();
+
+  const cityName = cityRow?.name ?? city;
+
+  return {
+    title: `Tatoueurs à ${cityName} | TattooCityGuide`,
+    description: `Découvre des tatoueurs à ${cityName}. Parcours les styles, ouvre Instagram et contacte facilement l’artiste.`,
+  };
+}
+
 export default async function CityPage({
   params,
 }: {
