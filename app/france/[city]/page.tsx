@@ -1,6 +1,22 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
+import Image from "next/image";
+
+type IgPost = {
+  url: string;
+  displayUrl?: string | null;
+  thumbnailUrl?: string | null;
+};
+
+type ArtistRow = {
+  id: number;
+  name: string;
+  slug: string;
+  instagram_url: string | null;
+  style_slugs: string[] | null;
+  ig_posts: IgPost[] | null;
+};
 
 export const revalidate = 86400; // 24h (ISR)
 
@@ -115,7 +131,7 @@ export default async function CityPage({
     .eq("is_active", true)
     .order("id", { ascending: true });
 
-  const safeArtists = artists ?? [];
+    const safeArtists: ArtistRow[] = (artists ?? []) as ArtistRow[];
 
   return (
     <main className="min-h-screen bg-white text-black">
@@ -193,7 +209,7 @@ export default async function CityPage({
             </h2>
 
             <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {safeArtists.map((a) => {
+            {safeArtists.map((a: ArtistRow) => {
                 const styles = (a.style_slugs ?? []).slice(0, 4);
                 const hasInstagram = Boolean(a.instagram_url);
 
@@ -262,25 +278,33 @@ export default async function CityPage({
                       </Link>
                     </div>
                     {/* Instagram preview */}
-{Array.isArray((a as any).ig_posts) && (a as any).ig_posts.length > 0 && (
+{/* Instagram preview */}
+{Array.isArray(a.ig_posts) && a.ig_posts.length > 0 && (
   <div className="mt-4 grid grid-cols-3 gap-2">
-    {(a as any).ig_posts.slice(0, 6).map((p: any) => (
-      <a
-        key={p.url}
-        href={p.url}
-        target="_blank"
-        rel="noreferrer"
-        className="block overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02]"
-        title="Voir sur Instagram"
-      >
-        <img
-          src={p.displayUrl ?? p.thumbnailUrl}
-          alt=""
-          className="h-24 w-full object-cover"
-          loading="lazy"
-        />
-      </a>
-    ))}
+    {a.ig_posts.slice(0, 6).map((p) => {
+      const src = p.displayUrl ?? p.thumbnailUrl;
+      if (!src) return null;
+
+      return (
+        <a
+          key={p.url}
+          href={p.url}
+          target="_blank"
+          rel="noreferrer"
+          className="block overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02]"
+          title="Voir sur Instagram"
+        >
+          <Image
+  src={src}
+  alt=""
+  width={240}
+  height={240}
+  className="h-24 w-full object-cover"
+  unoptimized
+/>
+        </a>
+      );
+    })}
   </div>
 )}
                   </div>
