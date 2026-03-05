@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -190,6 +191,14 @@ export default async function ArtistPage({
 
   const styles = (artist.style_slugs ?? []).slice(0, 8);
 
+  // Récupère les 9 derniers posts re-hostés (Supabase Storage)
+  const { data: posts } = await supabase
+    .from("artist_ig_posts")
+    .select("shortcode, ig_post_url, image_path, taken_at")
+    .eq("artist_id", artist.id)
+    .order("taken_at", { ascending: false })
+    .limit(9);
+
   return (
     <main className="min-h-screen bg-white text-black">
       {/* décor léger */}
@@ -319,6 +328,57 @@ export default async function ArtistPage({
             </div>
           )}
         </div>
+
+        {/* Galerie (posts Instagram re-hostés) */}
+        {posts && posts.length > 0 && (
+          <div className="mt-8 rounded-3xl border border-black/10 bg-white p-6 shadow-sm">
+            <div className="flex items-baseline justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold">Derniers tatouages</div>
+                <div className="mt-1 text-xs text-black/55">
+                  Clique sur une photo pour ouvrir le post Instagram.
+                </div>
+              </div>
+
+              {artist.instagram_url && (
+                <a
+                  href={artist.instagram_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-medium text-black/70 hover:text-black transition"
+                >
+                  Voir tout sur Instagram →
+                </a>
+              )}
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              {posts.map((p) => {
+                const imgUrl =
+                  supabase.storage.from("ig").getPublicUrl(p.image_path).data.publicUrl;
+
+                return (
+                  <a
+                    key={p.shortcode}
+                    href={p.ig_post_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02]"
+                  >
+                    <Image
+                      src={imgUrl}
+                      alt={`Tatouage de ${artist.name}`}
+                      width={400}
+                      height={400}
+                      className="aspect-square w-full object-cover transition hover:scale-[1.02]"
+                      loading="lazy"
+                    />
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Infos pratiques */}
         <div className="mt-8 rounded-3xl border border-black/10 bg-white p-6 shadow-sm">

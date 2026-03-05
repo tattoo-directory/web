@@ -131,7 +131,23 @@ export default async function CityPage({
     .eq("is_active", true)
     .order("id", { ascending: true });
 
-    const safeArtists: ArtistRow[] = (artists ?? []) as ArtistRow[];
+  const artistIds = (artists ?? []).map((a) => a.id);
+
+  const { data: igPosts } = await supabase
+    .from("artist_ig_posts")
+    .select("artist_id, shortcode, ig_post_url, image_path, taken_at")
+    .in("artist_id", artistIds)
+    .order("taken_at", { ascending: false });
+
+  const postsByArtistId = new Map<number, typeof igPosts>();
+
+  for (const p of igPosts ?? []) {
+    const arr = postsByArtistId.get(p.artist_id) ?? [];
+    if (arr.length < 6) arr.push(p); // ✅ max 6 images
+    postsByArtistId.set(p.artist_id, arr);
+  }
+
+  const safeArtists: ArtistRow[] = (artists ?? []) as ArtistRow[];
 
   return (
     <main className="min-h-screen bg-white text-black">
@@ -210,6 +226,7 @@ export default async function CityPage({
 
             <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {safeArtists.map((a: ArtistRow) => {
+              const miniPosts = postsByArtistId.get(a.id) ?? [];
                 const styles = (a.style_slugs ?? []).slice(0, 4);
                 const hasInstagram = Boolean(a.instagram_url);
 
@@ -237,6 +254,40 @@ export default async function CityPage({
                                 {slugToLabel(s)}
                               </span>
                             ))}
+                            <div className="mt-4 grid grid-cols-3 gap-2">
+  {miniPosts.length > 0 ? (
+    miniPosts.map((p) => {
+      const imgUrl =
+        supabase.storage.from("ig").getPublicUrl(p.image_path).data.publicUrl;
+
+      return (
+        <a
+          key={p.shortcode}
+          href={p.ig_post_url}
+          target="_blank"
+          rel="noreferrer"
+          className="block overflow-hidden rounded-xl border border-black/10"
+        >
+          <Image
+            src={imgUrl}
+            alt=""
+            width={240}
+            height={240}
+            className="aspect-square w-full object-cover"
+            loading="lazy"
+          />
+        </a>
+      );
+    })
+  ) : (
+    Array.from({ length: 6 }).map((_, i) => (
+      <div
+        key={i}
+        className="aspect-square w-full rounded-xl border border-black/10 bg-black/[0.02]"
+      />
+    ))
+  )}
+</div>
                           </div>
                         ) : (
                           <div className="mt-3 text-sm text-black/50">
@@ -278,35 +329,7 @@ export default async function CityPage({
                       </Link>
                     </div>
                     {/* Instagram preview */}
-{/* Instagram preview */}
-{Array.isArray(a.ig_posts) && a.ig_posts.length > 0 && (
-  <div className="mt-4 grid grid-cols-3 gap-2">
-    {a.ig_posts.slice(0, 6).map((p) => {
-      const src = p.displayUrl ?? p.thumbnailUrl;
-      if (!src) return null;
 
-      return (
-        <a
-          key={p.url}
-          href={p.url}
-          target="_blank"
-          rel="noreferrer"
-          className="block overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02]"
-          title="Voir sur Instagram"
-        >
-          <Image
-  src={src}
-  alt=""
-  width={240}
-  height={240}
-  className="h-24 w-full object-cover"
-  unoptimized
-/>
-        </a>
-      );
-    })}
-  </div>
-)}
                   </div>
                 );
               })}
