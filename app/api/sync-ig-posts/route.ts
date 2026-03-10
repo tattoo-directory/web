@@ -10,21 +10,40 @@ if (!supabaseUrl) {
   throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)");
 }
 
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+}
+
+if (!process.env.APIFY_DATASET_ID) {
+  throw new Error("Missing APIFY_DATASET_ID");
+}
+
+if (!process.env.APIFY_TOKEN) {
+  throw new Error("Missing APIFY_TOKEN");
+}
+
 const supabase = createClient(
   supabaseUrl,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 type ApifyPost = {
   ownerUsername?: string;
+  username?: string;
   url?: string;
   displayUrl?: string;
   timestamp?: string;
 };
 
+function normalizeHandle(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .replace(/^@/, "")
+    .toLowerCase();
+}
+
 function extractShortcode(postUrl: string) {
-  // ex: https://www.instagram.com/p/lqQYFGrNuR/
-  const m = postUrl.match(/instagram\.com\/p\/([^/]+)\//);
+  const m = postUrl.match(/instagram\.com\/p\/([^/?#]+)\//);
   return m?.[1] ?? null;
 }
 
@@ -36,26 +55,29 @@ function guessExt(contentType: string | null) {
 }
 
 export async function POST() {
-  // 1) artistes actifs avec handle
   const { data: artists, error: aErr } = await supabase
     .from("artists")
     .select("id, instagram_handle")
     .eq("is_active", true)
     .not("instagram_handle", "is", null);
 
-  if (aErr) return NextResponse.json({ error: aErr.message }, { status: 500 });
-
-  // index artistes par handle (sans @)
-  const artistByHandle = new Map<string, number>();
-  for (const a of artists ?? []) {
-    const h = String(a.instagram_handle).replace("@", "").toLowerCase();
-    artistByHandle.set(h, a.id);
+  if (aErr) {
+    return NextResponse.json({ error: aErr.message }, { status: 500 });
   }
 
-  // 2) récup items Apify dataset
+  const artistByHandle = new Map<string, number>();
+  for (const a of artists ?? []) {
+    const h = normalizeHandle(a.instagram_handle);
+    if (h) artistByHandle.set(h, a.id);
+  }
+
   const apifyUrl = `https://api.apify.com/v2/datasets/${process.env.APIFY_DATASET_ID}/items?clean=true&format=json`;
+
   const apifyRes = await fetch(apifyUrl, {
-    headers: { Authorization: `Bearer ${process.env.APIFY_TOKEN}` },
+    headers: {
+      Authorization: `Bearer ${process.env.APIFY_TOKEN}`,
+    },
+    cache: "no-store",
   });
 
   if (!apifyRes.ok) {
@@ -71,10 +93,14 @@ export async function POST() {
   let skipped = 0;
   let unmatched = 0;
 
-  // 3) pour chaque item : map vers artist_id, télécharge, upload, insert
+  const seenArtistIds = new Set<number>();
+
   for (const it of items) {
-    const handle = String(it.ownerUsername ?? "").toLowerCase();
-    if (!handle) continue;
+    const handle = normalizeHandle(it.ownerUsername || it.username);
+    if (!handle) {
+      skipped++;
+      continue;
+    }
 
     const artistId = artistByHandle.get(handle);
     if (!artistId) {
@@ -82,56 +108,77 @@ export async function POST() {
       continue;
     }
 
+    if (!seenArtistIds.has(artistId)) {
+      seenArtistIds.add(artistId);
+
+      const { data: oldPosts } = await supabase
+        .from("artist_ig_posts")
+        .select("id, image_path")
+        .eq("artist_id", artistId);
+
+      for (const oldPost of oldPosts ?? []) {
+        if (oldPost.image_path) {
+          await supabase.storage.from("ig").remove([oldPost.image_path]);
+        }
+      }
+
+      await supabase.from("artist_ig_posts").delete().eq("artist_id", artistId);
+    }
+
     const igPostUrl: string | null = it.url ?? null;
     const imgUrl: string | null = it.displayUrl ?? null;
     const shortcode = igPostUrl ? extractShortcode(igPostUrl) : null;
 
-    if (!igPostUrl || !imgUrl || !shortcode) continue;
-
-    // déjà en base ?
-    const { data: exists } = await supabase
-      .from("artist_ig_posts")
-      .select("id")
-      .eq("artist_id", artistId)
-      .eq("shortcode", shortcode)
-      .maybeSingle();
-
-    if (exists?.id) {
+    if (!igPostUrl || !imgUrl || !shortcode) {
       skipped++;
       continue;
     }
 
-    // download image
     const imgRes = await fetch(imgUrl);
-    if (!imgRes.ok) continue;
+    if (!imgRes.ok) {
+      skipped++;
+      continue;
+    }
 
     const contentType = imgRes.headers.get("content-type");
     const ext = guessExt(contentType);
     const buffer = Buffer.from(await imgRes.arrayBuffer());
 
-    // upload storage
     const path = `${artistId}/${shortcode}.${ext}`;
-    const { error: upErr } = await supabase.storage.from("ig").upload(path, buffer, {
-      contentType: contentType ?? "image/jpeg",
-      upsert: false,
-    });
+
+    const { error: upErr } = await supabase.storage
+      .from("ig")
+      .upload(path, buffer, {
+        contentType: contentType ?? "image/jpeg",
+        upsert: true,
+      });
 
     if (upErr) {
       skipped++;
       continue;
     }
 
-    // insert DB
     const { error: insErr } = await supabase.from("artist_ig_posts").insert({
       artist_id: artistId,
       shortcode,
       ig_post_url: igPostUrl,
       image_path: path,
-      taken_at: it.timestamp ?? null, // déjà ISO string
+      taken_at: it.timestamp ?? null,
     });
 
-    if (!insErr) uploaded++;
+    if (insErr) {
+      skipped++;
+      continue;
+    }
+
+    uploaded++;
   }
 
-  return NextResponse.json({ ok: true, uploaded, skipped, unmatched });
+  return NextResponse.json({
+    ok: true,
+    uploaded,
+    skipped,
+    unmatched,
+    artistsMatched: seenArtistIds.size,
+  });
 }

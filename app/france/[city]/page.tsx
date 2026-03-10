@@ -14,8 +14,6 @@ type ArtistRow = {
   name: string;
   slug: string;
   instagram_url: string | null;
-  style_slugs: string[] | null;
-  ig_posts: IgPost[] | null;
 };
 
 export const revalidate = 86400; // 24h (ISR)
@@ -125,7 +123,7 @@ export default async function CityPage({
 
   const { data: artists, error } = await supabase
     .from("artists")
-    .select("id, name, slug, instagram_url, style_slugs, ig_posts")
+    .select("id, name, slug, instagram_url")
     .eq("country_code", "FR")
     .eq("city_slug", city)
     .eq("is_active", true)
@@ -225,112 +223,128 @@ export default async function CityPage({
             </h2>
 
             <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {safeArtists.map((a: ArtistRow) => {
-              const miniPosts = postsByArtistId.get(a.id) ?? [];
-                const styles = (a.style_slugs ?? []).slice(0, 4);
+              {safeArtists.map((a: ArtistRow) => {
+                const posts = postsByArtistId.get(a.id) ?? [];
                 const hasInstagram = Boolean(a.instagram_url);
 
+                const heroPost = posts[0];
+                const thumbPosts = posts.slice(1, 4);
+
+                const heroUrl = heroPost
+                  ? supabase.storage.from("ig").getPublicUrl(heroPost.image_path).data.publicUrl
+                  : null;
+
                 return (
-                  <div
+                  <article
                     key={a.id}
-                    className="rounded-3xl border border-black/10 bg-white p-6 shadow-sm"
+                    className="group flex h-full flex-col overflow-hidden rounded-[28px] border border-black/10 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <Link
-                          href={`/france/${city}/${a.slug}`}
-                          className="text-base font-semibold hover:underline"
-                        >
-                          {a.name}
-                        </Link>
-
-                        {styles.length > 0 ? (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {styles.map((s) => (
-                              <span
-                                key={s}
-                                className="rounded-full border border-black/10 bg-black/[0.03] px-3 py-1 text-xs text-black/70"
-                              >
-                                {slugToLabel(s)}
-                              </span>
-                            ))}
-                            <div className="mt-4 grid grid-cols-3 gap-2">
-  {miniPosts.length > 0 ? (
-    miniPosts.map((p) => {
-      const imgUrl =
-        supabase.storage.from("ig").getPublicUrl(p.image_path).data.publicUrl;
-
-      return (
-        <a
-          key={p.shortcode}
-          href={p.ig_post_url}
-          target="_blank"
-          rel="noreferrer"
-          className="block overflow-hidden rounded-xl border border-black/10"
-        >
-          <Image
-            src={imgUrl}
-            alt=""
-            width={240}
-            height={240}
-            className="aspect-square w-full object-cover"
-            loading="lazy"
-          />
-        </a>
-      );
-    })
-  ) : (
-    Array.from({ length: 6 }).map((_, i) => (
-      <div
-        key={i}
-        className="aspect-square w-full rounded-xl border border-black/10 bg-black/[0.02]"
-      />
-    ))
-  )}
-</div>
-                          </div>
+                    <div className="p-4">
+                      <Link
+                        href={`/france/${city}/${a.slug}`}
+                        className="block overflow-hidden rounded-[22px] bg-black/[0.03]"
+                      >
+                        {heroUrl ? (
+                          <Image
+                            src={heroUrl}
+                            alt={`Tatouage par ${a.name}`}
+                            width={800}
+                            height={1000}
+                            className="aspect-[4/5] w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                          />
                         ) : (
-                          <div className="mt-3 text-sm text-black/50">
-                            Styles non renseignés
-                          </div>
+                          <div className="aspect-[4/5] w-full bg-black/[0.04]" />
+                        )}
+                      </Link>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        {thumbPosts.length > 0 ? (
+                          thumbPosts.map((p) => {
+                            const imgUrl =
+                              supabase.storage.from("ig").getPublicUrl(p.image_path).data.publicUrl;
+
+                            return (
+                              <a
+                                key={p.shortcode}
+                                href={p.ig_post_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block overflow-hidden rounded-2xl bg-black/[0.03]"
+                              >
+                                <Image
+                                  src={imgUrl}
+                                  alt={`Post Instagram de ${a.name}`}
+                                  width={240}
+                                  height={240}
+                                  className="aspect-square w-full object-cover transition duration-300 hover:scale-[1.03]"
+                                  loading="lazy"
+                                />
+                              </a>
+                            );
+                          })
+                        ) : (
+                          Array.from({ length: 3 }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="aspect-square rounded-2xl bg-black/[0.04]"
+                            />
+                          ))
                         )}
                       </div>
 
-                      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-black/10 bg-white shadow-sm">
-                        <ArrowRightIcon className="h-5 w-5 text-black/60" />
+                      <div className="mt-4 flex flex-1 flex-col">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <Link
+                              href={`/france/${city}/${a.slug}`}
+                              className="text-lg font-semibold tracking-tight hover:underline"
+                            >
+                              {a.name}
+                            </Link>
+                            <p className="mt-1 text-sm text-black/55">
+                              Portfolio tatouage à {cityRow.name}
+                            </p>
+                          </div>
+
+                          <Link
+                            href={`/france/${city}/${a.slug}`}
+                            className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-black/10 bg-white shadow-sm transition group-hover:translate-x-0.5"
+                            aria-label={`Voir la page de ${a.name}`}
+                          >
+                            <ArrowRightIcon className="h-5 w-5 text-black/65" />
+                          </Link>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {hasInstagram ? (
+                            <a
+                              href={a.instagram_url!}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold shadow-sm transition hover:shadow"
+                            >
+                              <InstagramIcon className="h-4 w-4" />
+                              Instagram
+                              <ArrowRightIcon className="h-4 w-4" />
+                            </a>
+                          ) : (
+                            <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.02] px-4 py-2 text-sm font-semibold text-black/35">
+                              <InstagramIcon className="h-4 w-4" />
+                              Instagram indisponible
+                            </span>
+                          )}
+
+                          <Link
+                            href={`/france/${city}/${a.slug}`}
+                            className="inline-flex items-center gap-2 rounded-full bg-black px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+                          >
+                            Voir la page
+                            <ArrowRightIcon className="h-4 w-4 text-white" />
+                          </Link>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="mt-5 flex flex-wrap gap-2">
-                      {hasInstagram ? (
-                        <a
-                          href={a.instagram_url!}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:shadow transition"
-                        >
-                          <InstagramIcon className="h-4 w-4" />
-                          Instagram
-                          <ArrowRightIcon className="h-4 w-4" />
-                        </a>
-                      ) : (
-                        <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.02] px-4 py-2 text-sm font-semibold text-black/35">
-                          <InstagramIcon className="h-4 w-4" />
-                          Instagram indisponible
-                        </span>
-                      )}
-
-                      <Link
-                        href={`/france/${city}/${a.slug}`}
-                        className="inline-flex items-center gap-2 rounded-full bg-black px-4 py-2 text-sm font-semibold text-white shadow-sm hover:opacity-90 transition"
-                      >
-                        Voir la page
-                        <ArrowRightIcon className="h-4 w-4 text-white" />
-                      </Link>
-                    </div>
-                    {/* Instagram preview */}
-
-                  </div>
+                  </article>
                 );
               })}
             </div>
@@ -339,7 +353,7 @@ export default async function CityPage({
 
         {/* Footer mini */}
         <div className="mt-12 text-xs text-black/45">
-          © {new Date().getFullYear()} TattooCityGuide
+          © 2026 TattooCityGuide
         </div>
       </div>
     </main>

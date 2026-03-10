@@ -20,29 +20,11 @@ function ArrowRightIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-function SearchIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" {...props}>
-      <path
-        d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-      <path
-        d="M16.5 16.5 21 21"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 export default async function FrancePage() {
   const { data: cities, error } = await supabase
-  .from("cities_with_artists")
-  .select("slug, name, artist_count")
-  .order("artist_count", { ascending: false });
+    .from("cities_with_artists")
+    .select("slug, name, artist_count")
+    .order("artist_count", { ascending: false });
 
   const safeCities = cities ?? [];
 
@@ -54,7 +36,7 @@ export default async function FrancePage() {
       </div>
 
       <div className="relative mx-auto max-w-6xl px-6 py-10">
-        {/* Header simple */}
+        {/* Header */}
         <div className="flex items-center justify-between">
           <Link
             href="/"
@@ -79,25 +61,6 @@ export default async function FrancePage() {
           </p>
         </div>
 
-        {/* Barre de recherche (UX) */}
-        <div className="mt-8 max-w-xl">
-          <label className="text-xs font-medium text-black/60">
-            Rechercher une ville
-          </label>
-          <div className="mt-2 flex items-center gap-2 rounded-2xl border border-black/10 bg-white px-4 py-3 shadow-inner">
-            <SearchIcon className="h-5 w-5 text-black/40" />
-            {/* Input non-fonctionnel côté serveur : on le laisse en "placeholder UX" */}
-            <input
-              className="w-full bg-transparent text-sm outline-none placeholder:text-black/35"
-              placeholder="Paris, Lyon, Marseille…"
-              disabled
-            />
-          </div>
-          <p className="mt-2 text-xs text-black/45">
-            (Bientôt) Recherche instantanée.
-          </p>
-        </div>
-
         {/* Error */}
         {error && (
           <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -108,7 +71,7 @@ export default async function FrancePage() {
           </div>
         )}
 
-        {/* Liste en cards */}
+        {/* Liste des villes */}
         <section className="mt-10">
           <h2 className="text-lg font-semibold tracking-tight">
             Villes disponibles
@@ -130,7 +93,7 @@ export default async function FrancePage() {
                     <div>
                       <div className="text-base font-semibold">{c.name}</div>
                       <div className="mt-1 text-sm text-black/60">
-                      {c.artist_count} tatoueur{c.artist_count > 1 ? "s" : ""}
+                        {c.artist_count} tatoueur{c.artist_count > 1 ? "s" : ""}
                       </div>
                     </div>
 
@@ -144,7 +107,7 @@ export default async function FrancePage() {
           )}
         </section>
 
-        {/* Footer mini */}
+        {/* Footer */}
         <div className="mt-12 text-xs text-black/45">
           © {new Date().getFullYear()} TattooCityGuide
         </div>
