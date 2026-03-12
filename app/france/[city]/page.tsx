@@ -16,6 +16,17 @@ type ArtistRow = {
   instagram_url: string | null;
 };
 
+const PAGE_SIZE = 50;
+
+const popularCities = [
+  { name: "Paris", slug: "paris" },
+  { name: "Lyon", slug: "lyon" },
+  { name: "Marseille", slug: "marseille" },
+  { name: "Bordeaux", slug: "bordeaux" },
+  { name: "Toulouse", slug: "toulouse" },
+  { name: "Nice", slug: "nice" },
+];
+
 export const revalidate = 86400; // 24h (ISR)
 
 const supabase = createClient(
@@ -107,10 +118,13 @@ export async function generateMetadata({
 
 export default async function CityPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ city: string }>;
+  searchParams: Promise<{ page?: string }>;
 }) {
-  const { city } = await params;
+  const [{ city }, search] = await Promise.all([params, searchParams]);
+  const currentPage = Math.max(1, Number(search?.page) || 1);
 
   const { data: cityRow } = await supabase
     .from("cities")
@@ -121,15 +135,19 @@ export default async function CityPage({
 
   if (!cityRow) return notFound();
 
-  const { data: artists, error } = await supabase
+  const { data: artists, error, count } = await supabase
     .from("artists")
-    .select("id, name, slug, instagram_url")
+    .select("id, name, slug, instagram_url", { count: "exact" })
     .eq("country_code", "FR")
     .eq("city_slug", city)
     .eq("is_active", true)
-    .order("id", { ascending: true });
+    .order("id", { ascending: true })
+    .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
 
   const artistIds = (artists ?? []).map((a) => a.id);
+
+  const totalArtists = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalArtists / PAGE_SIZE));
 
   const { data: igPosts } = await supabase
     .from("artist_ig_posts")
@@ -169,20 +187,63 @@ export default async function CityPage({
           </div>
 
           <Badge>
-            {safeArtists.length} artiste{safeArtists.length > 1 ? "s" : ""}
+            {totalArtists} artiste{totalArtists > 1 ? "s" : ""}
           </Badge>
         </div>
 
-        {/* Header */}
-        <div className="mt-8 max-w-3xl">
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            Tatoueurs à {cityRow.name}
-          </h1>
-          <p className="mt-3 text-base text-black/65">
-            Parcourez les artistes, consultez leur Instagram et accédez à leur
-            page détaillée.
-          </p>
-        </div>
+        {/* Header + intro */}
+        <section className="mt-8">
+          <div className="max-w-3xl">
+            <h1 className="text-4xl font-semibold tracking-tight text-zinc-900 sm:text-5xl">
+              Tatoueurs à {cityRow.name}
+            </h1>
+
+            <p className="mt-4 text-base leading-7 text-zinc-600 sm:text-lg">
+              Parcourez les artistes, consultez leur Instagram et accédez à leur page
+              détaillée.
+            </p>
+          </div>
+
+          <div className="mt-10 max-w-4xl rounded-3xl border border-zinc-200 bg-zinc-50/80 p-6 sm:p-8">
+            <div className="mb-3 inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-600">
+              Guide local
+            </div>
+
+            <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">
+              Trouver un tatoueur à {cityRow.name}
+            </h2>
+
+            <p className="mt-4 text-sm leading-7 text-zinc-600 sm:text-base">
+              {cityRow.name} possède une scène tattoo dynamique avec de nombreux artistes
+              spécialisés dans différents styles comme le fineline, le blackwork, le
+              réalisme ou encore le traditionnel. Sur cette page, vous pouvez découvrir
+              plusieurs tatoueurs situés à {cityRow.name} et consulter leurs réalisations
+              directement depuis leurs profils.
+            </p>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              {["Fineline", "Blackwork", "Réalisme", "Traditionnel"].map((style) => (
+                <span
+                  key={style}
+                  className="rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-700 ring-1 ring-zinc-200"
+                >
+                  {style}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-12 flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-semibold tracking-tight text-zinc-900">
+                Tatoueurs à découvrir
+              </h2>
+              <p className="mt-2 text-sm text-zinc-500">
+                Une sélection d’artistes basés à {cityRow.name}.
+              </p>
+            </div>
+          </div>
+        </section>
 
         {/* Error */}
         {error && (
@@ -217,12 +278,8 @@ export default async function CityPage({
 
         {/* Artists grid */}
         {safeArtists.length > 0 && (
-          <section className="mt-10">
-            <h2 className="text-lg font-semibold tracking-tight">
-              Artistes disponibles
-            </h2>
-
-            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <section className="mt-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {safeArtists.map((a: ArtistRow) => {
                 const posts = postsByArtistId.get(a.id) ?? [];
                 const hasInstagram = Boolean(a.instagram_url);
@@ -350,6 +407,58 @@ export default async function CityPage({
             </div>
           </section>
         )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="mt-8 flex items-center justify-between gap-4 text-xs text-black/65">
+            <p>
+              Page {currentPage} sur {totalPages} • {totalArtists} artiste
+              {totalArtists > 1 ? "s" : ""}
+            </p>
+            <div className="flex gap-2">
+              {currentPage > 1 && (
+                <Link
+                  href={`/france/${city}?page=${currentPage - 1}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-white px-3 py-1.5 font-medium shadow-sm hover:shadow transition"
+                >
+                  ← Page précédente
+                </Link>
+              )}
+              {currentPage < totalPages && (
+                <Link
+                  href={`/france/${city}?page=${currentPage + 1}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-white px-3 py-1.5 font-medium shadow-sm hover:shadow transition"
+                >
+                  Page suivante →
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
+
+        <section className="mt-16 border-t border-black/10 pt-8">
+          <h2 className="text-xl font-semibold mb-2">
+            Autres villes populaires
+          </h2>
+
+          <p className="mb-4 text-sm text-gray-600">
+            Découvrez aussi des tatoueurs dans d&apos;autres villes françaises.
+          </p>
+
+          <div className="flex flex-wrap gap-3">
+            {popularCities
+              .filter((c) => c.slug !== city)
+              .map((c) => (
+              <Link
+                key={c.slug}
+                href={`/france/${c.slug}`}
+                className="px-4 py-2 rounded-lg border border-black/10 text-sm hover:bg-black hover:text-white transition"
+              >
+                Tatoueurs à {c.name}
+              </Link>
+            ))}
+          </div>
+        </section>
 
         {/* Footer mini */}
         <div className="mt-12 text-xs text-black/45">

@@ -20,22 +20,21 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     .select("slug")
     .eq("country_code", "FR");
 
+  const { data: artists } = await supabase
+    .from("artists")
+    .select("slug, city_slug")
+    .eq("country_code", "FR")
+    .eq("is_active", true);
+
   for (const c of cities ?? []) {
     items.push({ url: `${baseUrl}/france/${c.slug}`, lastModified: now });
+  }
 
-    const { data: artists } = await supabase
-      .from("artists")
-      .select("slug")
-      .eq("country_code", "FR")
-      .eq("city_slug", c.slug)
-      .eq("is_active", true);
-
-    for (const a of artists ?? []) {
-      items.push({
-        url: `${baseUrl}/france/${c.slug}/${a.slug}`,
-        lastModified: now,
-      });
-    }
+  for (const a of artists ?? []) {
+    items.push({
+      url: `${baseUrl}/france/${a.city_slug}/${a.slug}`,
+      lastModified: now,
+    });
   }
 
   return items;
