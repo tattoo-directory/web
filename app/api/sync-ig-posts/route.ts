@@ -1,27 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
-
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-
-if (!supabaseUrl) {
-  throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)");
-}
-
-if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
-}
-
-if (!process.env.APIFY_TOKEN) {
-  throw new Error("Missing APIFY_TOKEN");
-}
-
-const supabase = createClient(
-  supabaseUrl,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 type ApifyPost = {
   ownerUsername?: string;
@@ -105,6 +85,7 @@ function guessExt(contentType: string | null) {
 }
 
 async function fetchAllRows<T>(
+  supabaseClient: SupabaseClient,
   table: string,
   columns: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -115,7 +96,7 @@ async function fetchAllRows<T>(
   let all: T[] = [];
 
   while (true) {
-    let query = supabase.from(table).select(columns).range(from, from + pageSize - 1);
+    let query = supabaseClient.from(table).select(columns).range(from, from + pageSize - 1);
 
     if (queryBuilder) {
       query = queryBuilder(query) ?? query;
@@ -225,8 +206,44 @@ async function fetchAllApifyPosts(datasetId: string): Promise<ApifyItem[]> {
 }
 
 export async function POST(req: Request) {
+  const supabaseUrl =
+    process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const apifyDatasetId = process.env.APIFY_DATASET_ID;
+  const apifyToken = process.env.APIFY_TOKEN;
+
+  if (!supabaseUrl) {
+    return NextResponse.json(
+      { error: "Missing NEXT_PUBLIC_SUPABASE_URL" },
+      { status: 500 }
+    );
+  }
+
+  if (!serviceRoleKey) {
+    return NextResponse.json(
+      { error: "Missing SUPABASE_SERVICE_ROLE_KEY" },
+      { status: 500 }
+    );
+  }
+
+  if (!apifyDatasetId) {
+    return NextResponse.json(
+      { error: "Missing APIFY_DATASET_ID" },
+      { status: 500 }
+    );
+  }
+
+  if (!apifyToken) {
+    return NextResponse.json(
+      { error: "Missing APIFY_TOKEN" },
+      { status: 500 }
+    );
+  }
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
+
   const body = await req.json().catch(() => ({}));
-  const datasetId = body.datasetId || process.env.APIFY_DATASET_ID;
+  const datasetId = body.datasetId || apifyDatasetId;
 
   if (!datasetId) {
     return NextResponse.json(
@@ -243,6 +260,7 @@ export async function POST(req: Request) {
       instagram_handle: string | null;
       instagram_url: string | null;
     }>(
+      supabase,
       "artists",
       "id, instagram_handle, instagram_url",
       (q) => q.eq("is_active", true)
@@ -250,7 +268,7 @@ export async function POST(req: Request) {
 
     const existingPosts = await fetchAllRows<{
       artist_id: number;
-    }>("artist_ig_posts", "artist_id");
+    }>(supabase, "artist_ig_posts", "artist_id");
 
     const postCountByArtistId = new Map<number, number>();
 
@@ -401,6 +419,7 @@ export async function POST(req: Request) {
       artist_id: number;
       shortcode: string | null;
     }>(
+      supabase,
       "artist_ig_posts",
       "artist_id, shortcode",
       (q) => q.in("artist_id", artistIdsToProcess)
