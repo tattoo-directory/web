@@ -14,10 +14,6 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
 }
 
-if (!process.env.APIFY_DATASET_ID) {
-  throw new Error("Missing APIFY_DATASET_ID");
-}
-
 if (!process.env.APIFY_TOKEN) {
   throw new Error("Missing APIFY_TOKEN");
 }
@@ -34,16 +30,39 @@ type ApifyPost = {
   displayUrl?: string;
   timestamp?: string;
   inputUrl?: string;
+  shortCode?: string;
   owner?: {
     username?: string;
   };
 };
 
+type ApifyItem = ApifyPost & {
+  userName?: string;
+  igHandle?: string;
+  handle?: string;
+  profileHandle?: string;
+  user?: { username?: string };
+};
+
+const TARGET_POST_COUNT_MAX = 6;
+const BANNED_HANDLES = new Set([
+  "p",
+  "reel",
+  "reels",
+  "explore",
+  "stories",
+  "accounts",
+  "tv",
+]);
+
 function normalizeHandle(value: string | null | undefined) {
   return String(value ?? "")
     .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//, "")
     .replace(/^@/, "")
-    .toLowerCase();
+    .replace(/\/$/, "")
+    .replace(/\/.*$/, "");
 }
 
 function extractHandleFromInstagramUrl(url: string | null | undefined) {
@@ -51,39 +70,25 @@ function extractHandleFromInstagramUrl(url: string | null | undefined) {
   const match = value.match(/instagram\.com\/([^/?#]+)/i);
   const handle = match?.[1] ? normalizeHandle(match[1]) : "";
 
-  const banned = new Set([
-    "p",
-    "reel",
-    "reels",
-    "explore",
-    "stories",
-    "accounts",
-    "tv",
-  ]);
-
-  if (!handle || banned.has(handle)) return "";
+  if (!handle || BANNED_HANDLES.has(handle)) return "";
   return handle;
 }
 
-function getApifyHandle(post: ApifyPost) {
-  const handle = normalizeHandle(
-    post.ownerUsername ||
-      post.owner?.username ||
-      post.username ||
-      extractHandleFromInstagramUrl(post.inputUrl)
-  );
+function getApifyItemHandle(item: ApifyItem) {
+  const raw =
+    item.ownerUsername ||
+    item.username ||
+    item.userName ||
+    item.igHandle ||
+    item.handle ||
+    item.profileHandle ||
+    item.owner?.username ||
+    item.user?.username ||
+    extractHandleFromInstagramUrl(item.inputUrl);
 
-  const banned = new Set([
-    "p",
-    "reel",
-    "reels",
-    "explore",
-    "stories",
-    "accounts",
-    "tv",
-  ]);
+  const handle = normalizeHandle(raw);
 
-  if (!handle || banned.has(handle)) return "";
+  if (!handle || BANNED_HANDLES.has(handle)) return "";
   return handle;
 }
 
@@ -99,6 +104,37 @@ function guessExt(contentType: string | null) {
   return "jpg";
 }
 
+async function fetchAllRows<T>(
+  table: string,
+  columns: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  queryBuilder?: (q: any) => any
+): Promise<T[]> {
+  const pageSize = 1000;
+  let from = 0;
+  let all: T[] = [];
+
+  while (true) {
+    let query = supabase.from(table).select(columns).range(from, from + pageSize - 1);
+
+    if (queryBuilder) {
+      query = queryBuilder(query) ?? query;
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw new Error(error.message);
+
+    const batch = (data ?? []) as T[];
+    all = all.concat(batch);
+
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return all;
+}
+
 async function fetchJsonWithTimeout(
   url: string,
   init?: RequestInit,
@@ -108,7 +144,6 @@ async function fetchJsonWithTimeout(
   const timeout = setTimeout(() => controller.abort(), ms);
 
   try {
-    console.log(`fetchJsonWithTimeout url=${url} ms=${ms}`);
     const res = await fetch(url, {
       ...init,
       signal: controller.signal,
@@ -127,7 +162,6 @@ async function fetchBufferWithTimeout(
   const timeout = setTimeout(() => controller.abort(), ms);
 
   try {
-    console.log(`fetchBufferWithTimeout url=${url} ms=${ms}`);
     const res = await fetch(url, {
       signal: controller.signal,
     });
@@ -137,14 +171,14 @@ async function fetchBufferWithTimeout(
   }
 }
 
-async function fetchAllApifyPosts(): Promise<ApifyPost[]> {
-  const all: ApifyPost[] = [];
+async function fetchAllApifyPosts(datasetId: string): Promise<ApifyItem[]> {
+  const all: ApifyItem[] = [];
   const limit = 100;
   let offset = 0;
 
   while (true) {
     const url =
-      `https://api.apify.com/v2/datasets/${process.env.APIFY_DATASET_ID}/items` +
+      `https://api.apify.com/v2/datasets/${datasetId}/items` +
       `?clean=true&format=json&offset=${offset}&limit=${limit}`;
 
     console.log(`[APIFY] fetching offset=${offset} limit=${limit}`);
@@ -171,7 +205,7 @@ async function fetchAllApifyPosts(): Promise<ApifyPost[]> {
       throw new Error(`Apify fetch failed: ${res.status} - ${text}`);
     }
 
-    let batch: ApifyPost[];
+    let batch: ApifyItem[];
     try {
       batch = await res.json();
     } catch (error) {
@@ -190,256 +224,410 @@ async function fetchAllApifyPosts(): Promise<ApifyPost[]> {
   return all;
 }
 
-export async function POST() {
-  try {
-    console.log("sync-ig-posts started");
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const datasetId = body.datasetId || process.env.APIFY_DATASET_ID;
 
-    const { data: artists, error: aErr } = await supabase
-      .from("artists")
-      .select("id, instagram_handle, instagram_url")
-      .eq("is_active", true);
-
-    if (aErr) {
-      return NextResponse.json({ error: aErr.message }, { status: 500 });
-    }
-
-    console.log("artists fetched:", artists?.length ?? 0);
-
-    const { data: existingPosts, error: existingErr } = await supabase
-      .from("artist_ig_posts")
-      .select("artist_id");
-
-    if (existingErr) {
-      throw new Error(existingErr.message);
-    }
-
-    const existingArtistIds = new Set(
-      (existingPosts ?? []).map((row) => row.artist_id)
+  if (!datasetId) {
+    return NextResponse.json(
+      { error: "Missing datasetId (pass in body or set APIFY_DATASET_ID)" },
+      { status: 400 }
     );
+  }
+
+  try {
+    const start = Date.now();
+
+    const artists = await fetchAllRows<{
+      id: number;
+      instagram_handle: string | null;
+      instagram_url: string | null;
+    }>(
+      "artists",
+      "id, instagram_handle, instagram_url",
+      (q) => q.eq("is_active", true)
+    );
+
+    const existingPosts = await fetchAllRows<{
+      artist_id: number;
+    }>("artist_ig_posts", "artist_id");
+
+    const postCountByArtistId = new Map<number, number>();
+
+    for (const row of existingPosts) {
+      postCountByArtistId.set(
+        row.artist_id,
+        (postCountByArtistId.get(row.artist_id) ?? 0) + 1
+      );
+    }
 
     const newArtistByHandle = new Map<string, number>();
-    for (const a of artists ?? []) {
+
+    for (const artist of artists) {
       const handle =
-        normalizeHandle(a.instagram_handle) ||
-        extractHandleFromInstagramUrl(a.instagram_url);
+        normalizeHandle(artist.instagram_handle) ||
+        extractHandleFromInstagramUrl(artist.instagram_url);
 
       if (!handle) continue;
-      if (existingArtistIds.has(a.id)) continue;
-      newArtistByHandle.set(handle, a.id);
+
+      const postCount = postCountByArtistId.get(artist.id) ?? 0;
+      if (postCount >= TARGET_POST_COUNT_MAX) continue;
+
+      if (
+        [
+          "zone_47_tattoo",
+          "zombi_kitsch",
+          "zerokilltattoo",
+          "zazartattoo",
+          "zanzare_tattoo",
+          "zalywink",
+          "yvanpec",
+          "yusha.tattoo",
+        ].includes(handle)
+      ) {
+        console.log("[BUILD TARGET]", {
+          artistId: artist.id,
+          dbHandle: artist.instagram_handle,
+          dbUrl: artist.instagram_url,
+          normalizedHandle: handle,
+          postCount,
+          willBeIncluded: postCount < TARGET_POST_COUNT_MAX,
+        });
+      }
+
+      newArtistByHandle.set(handle, artist.id);
     }
 
-    console.log("new artists to process:", newArtistByHandle.size);
+    console.log("TARGET HANDLE COUNT BEFORE APIFY:", newArtistByHandle.size);
     console.log(
-      "sample artist handles:",
-      Array.from(newArtistByHandle.keys()).slice(0, 20)
+      "TARGET HANDLE SAMPLE:",
+      Array.from(newArtistByHandle.keys()).slice(0, 100)
     );
 
-    const items = await fetchAllApifyPosts();
-    console.log("apify items total:", items.length);
-    console.log("first apify item:", JSON.stringify(items[0], null, 2));
+    const debugTargetHandles = [
+      "zone_47_tattoo",
+      "zombi_kitsch",
+      "zerokilltattoo",
+      "zazartattoo",
+      "zanzare_tattoo",
+      "zalywink",
+      "yvanpec",
+      "yusha.tattoo",
+    ];
+
+    for (const h of debugTargetHandles) {
+      console.log("[TARGET MAP CHECK]", h, {
+        present: newArtistByHandle.has(h),
+        artistId: newArtistByHandle.get(h) ?? null,
+      });
+    }
+
+    const items = await fetchAllApifyPosts(datasetId);
+
+    console.log("APIFY TOTAL ITEMS:", items.length);
+
+    const rawHandles = new Map<string, number>();
+
+    for (const item of items) {
+      const rawHandle = getApifyItemHandle(item);
+      if (!rawHandle) continue;
+      rawHandles.set(rawHandle, (rawHandles.get(rawHandle) ?? 0) + 1);
+    }
+
+    console.log("APIFY UNIQUE RAW HANDLES:", rawHandles.size);
     console.log(
-      "sample apify handles:",
-      items.map((it) => getApifyHandle(it)).filter(Boolean).slice(0, 20)
+      "APIFY TOP HANDLES:",
+      Array.from(rawHandles.entries()).sort((a, b) => b[1] - a[1]).slice(0, 50)
     );
+
+    const postsByHandle = new Map<string, ApifyItem[]>();
+
+    for (const item of items) {
+      const handle = getApifyItemHandle(item);
+
+      if (!handle) continue;
+      if (!newArtistByHandle.has(handle)) continue;
+
+      const arr = postsByHandle.get(handle) ?? [];
+      arr.push(item);
+      postsByHandle.set(handle, arr);
+    }
+
+    for (const [handle, arr] of postsByHandle.entries()) {
+      arr.sort((a, b) => {
+        const ta = new Date(a.timestamp ?? 0).getTime();
+        const tb = new Date(b.timestamp ?? 0).getTime();
+        return tb - ta;
+      });
+
+      postsByHandle.set(handle, arr.slice(0, TARGET_POST_COUNT_MAX));
+    }
+
+    console.log("POSTS BY HANDLE COUNT:", postsByHandle.size);
+    console.log(
+      "MATCHED TARGET HANDLES SAMPLE:",
+      Array.from(postsByHandle.keys()).slice(0, 50)
+    );
+
+    const debugHandles = [
+      "zone_47_tattoo",
+      "zombi_kitsch",
+      "zerokilltattoo",
+      "zazartattoo",
+      "zanzare_tattoo",
+      "zalywink",
+      "yvanpec",
+      "yusha.tattoo",
+    ];
+
+    for (const h of debugHandles) {
+      console.log("[DEBUG HANDLE CHECK]", h, {
+        inTarget: newArtistByHandle.has(h),
+        inApify: postsByHandle.has(h),
+        postCount: postsByHandle.get(h)?.length ?? 0,
+      });
+    }
+
+    const apifyHandles = new Set(postsByHandle.keys());
+    const matchedByHandle = new Map<string, number>();
+    const matchedArtistIds = new Set<number>();
 
     let uploaded = 0;
     let skipped = 0;
-    let unmatched = 0;
-    let unmatchedSamples = 0;
+
+    const artistIdsToProcess = Array.from(newArtistByHandle.values());
+
+    const existingPostsForArtists = await fetchAllRows<{
+      artist_id: number;
+      shortcode: string | null;
+    }>(
+      "artist_ig_posts",
+      "artist_id, shortcode",
+      (q) => q.in("artist_id", artistIdsToProcess)
+    );
+
+    const existingShortcodesByArtistId = new Map<number, Set<string>>();
+
+    for (const row of existingPostsForArtists) {
+      if (!row.shortcode) continue;
+
+      const current =
+        existingShortcodesByArtistId.get(row.artist_id) ?? new Set<string>();
+      current.add(row.shortcode);
+      existingShortcodesByArtistId.set(row.artist_id, current);
+    }
+
+    console.log("PRELOADED EXISTING POSTS:", existingPostsForArtists.length);
+    console.log("ARTISTS TO PROCESS:", artistIdsToProcess.length);
+
+    let artistIndex = 0;
+    const totalArtists = newArtistByHandle.size;
     let matchedSamples = 0;
 
-    const seenArtistIds = new Set<number>();
+    for (const [handle, artistId] of newArtistByHandle.entries()) {
+      artistIndex++;
 
-    for (const it of items) {
-      const handle = getApifyHandle(it);
-      if (!handle) {
-        skipped++;
-        continue;
+      if (artistIndex % 50 === 0) {
+        console.log(`[PROGRESS] ${artistIndex}/${totalArtists}`);
       }
 
-      const artistId = newArtistByHandle.get(handle);
-      if (!artistId) {
-        unmatched++;
-        if (unmatchedSamples < 15) {
-          console.log("[UNMATCHED]", {
-            handle,
-            ownerUsername: it.ownerUsername,
-            username: it.username,
-            ownerNested: it.owner?.username,
-            inputUrl: it.inputUrl,
-            postUrl: it.url,
-          });
-          unmatchedSamples++;
-        }
-        continue;
-      }
+      const artistPosts = postsByHandle.get(handle) ?? [];
+      if (artistPosts.length === 0) continue;
 
-      if (matchedSamples < 10) {
-        console.log("[MATCHED]", {
-          artistId,
-          handle,
-          postUrl: it.url,
-          displayUrl: it.displayUrl,
-        });
-        matchedSamples++;
-      }
-
-      if (!seenArtistIds.has(artistId)) {
-        seenArtistIds.add(artistId);
-
-        const { data: oldPosts, error: oldErr } = await supabase
-          .from("artist_ig_posts")
-          .select("id, image_path")
-          .eq("artist_id", artistId);
-
-        if (oldErr) {
-          console.error("old posts fetch error", oldErr);
-          throw new Error(oldErr.message);
-        }
-
-        for (const oldPost of oldPosts ?? []) {
-          if (oldPost.image_path) {
-            const { error: removeErr } = await supabase.storage
-              .from("ig")
-              .remove([oldPost.image_path]);
-
-            if (removeErr) {
-              console.error("storage remove error", removeErr);
-            }
-          }
-        }
-
-        const { error: deleteErr } = await supabase
-          .from("artist_ig_posts")
-          .delete()
-          .eq("artist_id", artistId);
-
-        if (deleteErr) {
-          console.error("delete old posts error", deleteErr);
-          throw new Error(deleteErr.message);
-        }
-      }
-
-      const igPostUrl: string | null = it.url ?? null;
-      const imgUrl: string | null = it.displayUrl ?? null;
-      const shortcode = igPostUrl ? extractShortcode(igPostUrl) : null;
-
-      if (!igPostUrl || !imgUrl || !shortcode) {
-        console.log("[SKIP missing data]", {
-          artistId,
-          handle,
-          igPostUrl,
-          imgUrl,
-          shortcode,
-        });
-        skipped++;
-        continue;
-      }
-
-      let imgRes: Response;
-
-      try {
-        imgRes = await fetchBufferWithTimeout(imgUrl, 15000);
-      } catch (error) {
-        console.log("[SKIP image fetch error]", {
-          artistId,
-          handle,
-          shortcode,
-          imgUrl,
-          error,
-        });
-        skipped++;
-        continue;
-      }
-
-      if (!imgRes.ok) {
-        console.log("[SKIP image bad response]", {
-          artistId,
-          handle,
-          shortcode,
-          status: imgRes.status,
-          imgUrl,
-        });
-        skipped++;
-        continue;
-      }
-
-      const contentType = imgRes.headers.get("content-type");
-      const ext = guessExt(contentType);
-
-      let buffer: Buffer;
-      try {
-        buffer = Buffer.from(await imgRes.arrayBuffer());
-      } catch (error) {
-        console.error(
-          `[IMG] arrayBuffer failed artist=${artistId} shortcode=${shortcode}`,
-          error
+      if (artistPosts.length < TARGET_POST_COUNT_MAX) {
+        console.log(
+          `[PARTIAL ARTIST] handle=${handle}, count=${artistPosts.length}`
         );
-        skipped++;
-        continue;
       }
 
-      const path = `${artistId}/${shortcode}.${ext}`;
+      const existingShortcodes =
+        existingShortcodesByArtistId.get(artistId) ?? new Set<string>();
 
-      const { error: upErr } = await supabase.storage
-        .from("ig")
-        .upload(path, buffer, {
-          contentType: contentType ?? "image/jpeg",
-          upsert: true,
-        });
+      for (const post of artistPosts) {
+        if (matchedSamples < 10) {
+          console.log("[MATCHED]", {
+            artistId,
+            handle,
+            postUrl: post.url,
+            displayUrl: post.displayUrl,
+          });
+          matchedSamples++;
+        }
 
-      if (upErr) {
-        console.log("[SKIP upload error]", {
-          artistId,
-          handle,
-          shortcode,
-          path,
-          error: upErr,
-        });
-        skipped++;
-        continue;
+        const igPostUrl = post.url;
+        const imgUrl = post.displayUrl;
+
+        if (typeof igPostUrl !== "string" || typeof imgUrl !== "string") {
+          console.log("[SKIP missing data]", {
+            artistId,
+            handle,
+            igPostUrl,
+            imgUrl,
+          });
+          skipped++;
+          continue;
+        }
+
+        const shortcode = post.shortCode || extractShortcode(igPostUrl);
+
+        if (!shortcode) {
+          console.log("[SKIP missing shortcode]", {
+            artistId,
+            handle,
+            igPostUrl,
+            imgUrl,
+          });
+          skipped++;
+          continue;
+        }
+
+        if (existingShortcodes.has(shortcode)) {
+          console.log("[SKIP already exists]", { artistId, handle, shortcode });
+          continue;
+        }
+
+        matchedArtistIds.add(artistId);
+        matchedByHandle.set(handle, (matchedByHandle.get(handle) ?? 0) + 1);
+
+        let imgRes: Response;
+        try {
+          imgRes = await fetchBufferWithTimeout(imgUrl, 8000);
+        } catch (error) {
+          console.log("[SKIP image fetch error]", {
+            artistId,
+            handle,
+            shortcode,
+            imgUrl,
+            error,
+          });
+          skipped++;
+          continue;
+        }
+
+        if (!imgRes.ok) {
+          console.log("[SKIP image bad response]", {
+            artistId,
+            handle,
+            shortcode,
+            status: imgRes.status,
+            imgUrl,
+          });
+          skipped++;
+          continue;
+        }
+
+        const contentType = imgRes.headers.get("content-type");
+        const ext = guessExt(contentType);
+
+        let buffer: Buffer;
+        try {
+          buffer = Buffer.from(await imgRes.arrayBuffer());
+        } catch (error) {
+          console.error(
+            `[IMG] arrayBuffer failed artist=${artistId} shortcode=${shortcode}`,
+            error
+          );
+          skipped++;
+          continue;
+        }
+
+        const path = `${artistId}/${shortcode}.${ext}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("ig")
+          .upload(path, buffer, {
+            contentType: contentType ?? "image/jpeg",
+            upsert: false,
+          });
+
+        if (uploadError) {
+          const statusCode =
+            typeof uploadError === "object" &&
+            uploadError &&
+            "statusCode" in uploadError
+              ? String(
+                  (uploadError as { statusCode?: string | number }).statusCode
+                )
+              : "";
+
+          if (statusCode !== "409") {
+            console.log("[SKIP upload error]", {
+              artistId,
+              handle,
+              shortcode,
+              path,
+              error: uploadError,
+            });
+            skipped++;
+            continue;
+          }
+
+          console.log("[UPLOAD already exists]", {
+            artistId,
+            handle,
+            shortcode,
+            path,
+          });
+        }
+
+        const { error: insertError } = await supabase
+          .from("artist_ig_posts")
+          .insert({
+            artist_id: artistId,
+            shortcode,
+            ig_post_url: igPostUrl,
+            image_path: path,
+            taken_at: post.timestamp ?? null,
+          });
+
+        if (insertError) {
+          console.log("[SKIP insert error]", {
+            artistId,
+            handle,
+            shortcode,
+            error: insertError,
+          });
+          skipped++;
+          continue;
+        }
+
+        existingShortcodes.add(shortcode);
+        existingShortcodesByArtistId.set(artistId, existingShortcodes);
+
+        uploaded++;
       }
-
-      const { error: insErr } = await supabase
-        .from("artist_ig_posts")
-        .insert({
-          artist_id: artistId,
-          shortcode,
-          ig_post_url: igPostUrl,
-          image_path: path,
-          taken_at: it.timestamp ?? null,
-        });
-
-      if (insErr) {
-        console.log("[SKIP insert error]", {
-          artistId,
-          handle,
-          shortcode,
-          error: insErr,
-        });
-        skipped++;
-        continue;
-      }
-
-      uploaded++;
     }
+
+    console.log(
+      "TOP MATCHED HANDLES:",
+      Array.from(matchedByHandle.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 100)
+    );
+
+    const targetHandles = new Set(newArtistByHandle.keys());
+    const intersection = Array.from(apifyHandles).filter((h) =>
+      targetHandles.has(h)
+    );
+
+    console.log("TARGET HANDLE COUNT:", targetHandles.size);
+    console.log("APIFY UNIQUE HANDLE COUNT:", apifyHandles.size);
+    console.log("INTERSECTION COUNT:", intersection.length);
+    console.log("SYNC TIME:", (Date.now() - start) / 1000, "seconds");
 
     return NextResponse.json({
       ok: true,
       uploaded,
       skipped,
-      unmatched,
-      artistsMatched: seenArtistIds.size,
+      unmatched: 0,
+      artistsMatched: matchedArtistIds.size,
     });
   } catch (error: unknown) {
     console.error("sync-ig-posts fatal error:", error);
+
     const message =
       error instanceof Error ? error.message : "Unknown server error";
-    return NextResponse.json(
-      {
-        error: message,
-      },
-      { status: 500 }
-    );
+
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

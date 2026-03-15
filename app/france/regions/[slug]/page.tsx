@@ -3,32 +3,25 @@ import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import Image from "next/image";
 
-type IgPost = {
-  url: string;
-  displayUrl?: string | null;
-  thumbnailUrl?: string | null;
-};
-
 type ArtistRow = {
   id: number;
   name: string;
   slug: string;
   instagram_url: string | null;
-  city_slug: string | null;
-  post_count: number;
+  city_slug: string;
+};
+
+type CityRow = {
+  name: string;
+  slug: string;
+};
+
+type RegionRow = {
+  name: string;
+  slug: string;
 };
 
 const PAGE_SIZE = 50;
-const IG_POSTS_BUCKET = "ig";
-
-const popularCities = [
-  { name: "Paris", slug: "paris" },
-  { name: "Lyon", slug: "lyon" },
-  { name: "Marseille", slug: "marseille" },
-  { name: "Bordeaux", slug: "bordeaux" },
-  { name: "Toulouse", slug: "toulouse" },
-  { name: "Nice", slug: "nice" },
-];
 
 export const revalidate = 86400; // 24h (ISR)
 
@@ -82,71 +75,65 @@ function Badge({ children }: { children: React.ReactNode }) {
   );
 }
 
-function slugToLabel(slug: string) {
-  return slug
-    .replaceAll("-", " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
-}
-
 export async function generateStaticParams() {
-  const { data: artists } = await supabase
-    .from("artists_with_post_count")
-    .select("city_slug")
-    .eq("country_code", "FR")
-    .eq("is_active", true)
-    .gte("post_count", 3);
+  const { data: regions } = await supabase
+    .from("regions")
+    .select("slug")
+    .eq("country_code", "FR");
 
-  const uniqueCitySlugs = [
-    ...new Set(
-      (artists ?? [])
-        .map((a) => a.city_slug)
-        .filter((citySlug): citySlug is string => Boolean(citySlug))
-    ),
-  ];
-
-  return uniqueCitySlugs.map((city) => ({ city }));
+  return (regions ?? []).map((r) => ({ slug: r.slug }));
 }
 
 export async function generateMetadata({
   params,
 }: {
-  params: Promise<{ city: string }>;
+  params: Promise<{ slug: string }>;
 }) {
-  const { city } = await params;
+  const { slug } = await params;
 
-  const { data: cityRow } = await supabase
-    .from("cities")
+  const { data: regionRow } = await supabase
+    .from("regions")
     .select("name")
     .eq("country_code", "FR")
-    .eq("slug", city)
+    .eq("slug", slug)
     .single();
 
-  const cityName = cityRow?.name ?? city;
+  const regionName = regionRow?.name ?? slug;
 
   return {
-    title: `Tatoueurs à ${cityName} | TattooCityGuide`,
-    description: `Découvre des tatoueurs à ${cityName}. Parcours les styles, ouvre Instagram et contacte facilement l’artiste.`,
+    title: `Tatoueurs en ${regionName} | TattooCityGuide`,
+    description: `Découvre des tatoueurs en ${regionName}. Parcours les artistes, ouvre Instagram et accède facilement à leur page détaillée.`,
   };
 }
 
-export default async function CityPage({
+export default async function RegionPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ city: string }>;
+  params: Promise<{ slug: string }>;
   searchParams: Promise<{ page?: string }>;
 }) {
-  const [{ city }, search] = await Promise.all([params, searchParams]);
+  const [{ slug }, search] = await Promise.all([params, searchParams]);
   const currentPage = Math.max(1, Number(search?.page) || 1);
 
-  const { data: cityRow } = await supabase
-    .from("cities")
-    .select("name")
+  const { data: regionRow } = await supabase
+    .from("regions")
+    .select("name, slug")
     .eq("country_code", "FR")
-    .eq("slug", city)
-    .single();
+    .eq("slug", slug)
+    .single<RegionRow>();
 
-  if (!cityRow) return notFound();
+  if (!regionRow) return notFound();
+
+  const { data: cities } = await supabase
+    .from("cities")
+    .select("name, slug")
+    .eq("country_code", "FR")
+    .eq("region_slug", slug)
+    .order("name", { ascending: true })
+    .returns<CityRow[]>();
+
+  if (!cities || cities.length === 0) return notFound();
 
   const { data: artists, error, count } = await supabase
     .from("artists_with_post_count")
@@ -154,7 +141,7 @@ export default async function CityPage({
       count: "exact",
     })
     .gte("post_count", 3)
-    .eq("city_slug", city)
+    .eq("region_slug", slug)
     .order("post_count", { ascending: false })
     .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
 
@@ -167,6 +154,10 @@ export default async function CityPage({
         </pre>
       </main>
     );
+  }
+
+  if (!artists) {
+    return notFound();
   }
 
   const artistIds = (artists ?? []).map((a) => a.id);
@@ -185,7 +176,7 @@ export default async function CityPage({
 
   for (const p of igPosts ?? []) {
     const arr = postsByArtistId.get(p.artist_id) ?? [];
-    if (arr.length < 6) arr.push(p); // ✅ max 6 images
+    if (arr.length < 6) arr.push(p);
     postsByArtistId.set(p.artist_id, arr);
   }
 
@@ -193,23 +184,21 @@ export default async function CityPage({
 
   return (
     <main className="min-h-screen bg-white text-black">
-      {/* Décor léger */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -top-40 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-gradient-to-tr from-black/[0.06] via-black/[0.03] to-transparent blur-3xl" />
       </div>
 
       <div className="relative mx-auto max-w-6xl px-6 py-10">
-        {/* Breadcrumb / top bar */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3 text-sm">
             <Link
-              href="/france"
+              href="/france/regions"
               className="text-black/70 hover:text-black transition"
             >
-              ← France
+              ← Régions
             </Link>
             <span className="text-black/30">/</span>
-            <span className="font-medium">{cityRow.name}</span>
+            <span className="font-medium">{regionRow.name}</span>
           </div>
 
           <Badge>
@@ -217,45 +206,46 @@ export default async function CityPage({
           </Badge>
         </div>
 
-        {/* Header + intro */}
         <section className="mt-8">
           <div className="max-w-3xl">
             <h1 className="text-4xl font-semibold tracking-tight text-zinc-900 sm:text-5xl">
-              Tatoueurs à {cityRow.name}
+              Tatoueurs en {regionRow.name}
             </h1>
 
             <p className="mt-4 text-base leading-7 text-zinc-600 sm:text-lg">
-              Parcourez les artistes, consultez leur Instagram et accédez à leur page
-              détaillée.
+              Parcourez les artistes de la région, consultez leur Instagram et
+              accédez à leur page détaillée.
             </p>
           </div>
 
           <div className="mt-10 max-w-4xl rounded-3xl border border-zinc-200 bg-zinc-50/80 p-6 sm:p-8">
             <div className="mb-3 inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-600">
-              Guide local
+              Guide régional
             </div>
 
             <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">
-              Trouver un tatoueur à {cityRow.name}
+              Trouver un tatoueur en {regionRow.name}
             </h2>
 
             <p className="mt-4 text-sm leading-7 text-zinc-600 sm:text-base">
-              {cityRow.name} possède une scène tattoo dynamique avec de nombreux artistes
-              spécialisés dans différents styles comme le fineline, le blackwork, le
-              réalisme ou encore le traditionnel. Sur cette page, vous pouvez découvrir
-              plusieurs tatoueurs situés à {cityRow.name} et consulter leurs réalisations
-              directement depuis leurs profils.
+              {regionRow.name} regroupe plusieurs villes avec des artistes
+              tatoueurs aux styles variés, du fineline au blackwork, en passant
+              par le réalisme et le traditionnel. Sur cette page, vous pouvez
+              découvrir les tatoueurs actifs dans la région et accéder
+              rapidement à leurs profils.
             </p>
 
             <div className="mt-5 flex flex-wrap gap-2">
-              {["Fineline", "Blackwork", "Réalisme", "Traditionnel"].map((style) => (
-                <span
-                  key={style}
-                  className="rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-700 ring-1 ring-zinc-200"
-                >
-                  {style}
-                </span>
-              ))}
+              {["Fineline", "Blackwork", "Réalisme", "Traditionnel"].map(
+                (style) => (
+                  <span
+                    key={style}
+                    className="rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-700 ring-1 ring-zinc-200"
+                  >
+                    {style}
+                  </span>
+                )
+              )}
             </div>
           </div>
 
@@ -265,13 +255,12 @@ export default async function CityPage({
                 Tatoueurs à découvrir
               </h2>
               <p className="mt-2 text-sm text-zinc-500">
-                Une sélection d’artistes basés à {cityRow.name}.
+                Une sélection d’artistes basés en {regionRow.name}.
               </p>
             </div>
           </div>
         </section>
 
-        {/* Error */}
         {error && (
           <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             <div className="font-semibold">Erreur Supabase</div>
@@ -281,7 +270,6 @@ export default async function CityPage({
           </div>
         )}
 
-        {/* Empty state */}
         {!error && safeArtists.length === 0 && (
           <div className="mt-10 rounded-3xl border border-black/10 bg-white p-8 shadow-sm">
             <div className="text-lg font-semibold">
@@ -292,17 +280,16 @@ export default async function CityPage({
             </p>
             <div className="mt-5">
               <Link
-                href="/france"
+                href="/france/regions"
                 className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold shadow-sm hover:shadow transition"
               >
-                Voir d’autres villes
+                Voir d’autres régions
                 <ArrowRightIcon className="h-4 w-4" />
               </Link>
             </div>
           </div>
         )}
 
-        {/* Artists grid */}
         {safeArtists.length > 0 && (
           <section className="mt-6">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -314,8 +301,11 @@ export default async function CityPage({
                 const thumbPosts = posts.slice(1, 4);
 
                 const heroUrl = heroPost
-                  ? supabase.storage.from(IG_POSTS_BUCKET).getPublicUrl(heroPost.image_path).data.publicUrl
+                  ? supabase.storage.from("ig").getPublicUrl(heroPost.image_path).data.publicUrl
                   : null;
+
+                const cityName =
+                  cities.find((c) => c.slug === a.city_slug)?.name ?? a.city_slug;
 
                 return (
                   <article
@@ -324,7 +314,7 @@ export default async function CityPage({
                   >
                     <div className="p-4">
                       <Link
-                        href={`/france/${city}/${a.slug}`}
+                        href={`/france/${a.city_slug}/${a.slug}`}
                         className="block overflow-hidden rounded-[22px] bg-black/[0.03]"
                       >
                         {heroUrl ? (
@@ -344,7 +334,7 @@ export default async function CityPage({
                         {thumbPosts.length > 0 ? (
                           thumbPosts.map((p) => {
                             const imgUrl =
-                              supabase.storage.from(IG_POSTS_BUCKET).getPublicUrl(p.image_path).data.publicUrl;
+                              supabase.storage.from("ig").getPublicUrl(p.image_path).data.publicUrl;
 
                             return (
                               <a
@@ -379,18 +369,18 @@ export default async function CityPage({
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <Link
-                              href={`/france/${city}/${a.slug}`}
+                              href={`/france/${a.city_slug}/${a.slug}`}
                               className="text-lg font-semibold tracking-tight hover:underline"
                             >
                               {a.name}
                             </Link>
                             <p className="mt-1 text-sm text-black/55">
-                              Portfolio tatouage à {cityRow.name}
+                              Portfolio tatouage à {cityName}
                             </p>
                           </div>
 
                           <Link
-                            href={`/france/${city}/${a.slug}`}
+                            href={`/france/${a.city_slug}/${a.slug}`}
                             className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-black/10 bg-white shadow-sm transition group-hover:translate-x-0.5"
                             aria-label={`Voir la page de ${a.name}`}
                           >
@@ -418,7 +408,7 @@ export default async function CityPage({
                           )}
 
                           <Link
-                            href={`/france/${city}/${a.slug}`}
+                            href={`/france/${a.city_slug}/${a.slug}`}
                             className="inline-flex items-center gap-2 rounded-full bg-black px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
                           >
                             Voir la page
@@ -434,7 +424,6 @@ export default async function CityPage({
           </section>
         )}
 
-        {/* Pagination */}
         {totalPages > 1 && (
           <div className="mt-8 flex items-center justify-between gap-4 text-xs text-black/65">
             <p>
@@ -444,7 +433,7 @@ export default async function CityPage({
             <div className="flex gap-2">
               {currentPage > 1 && (
                 <Link
-                  href={`/france/${city}?page=${currentPage - 1}`}
+                  href={`/france/regions/${slug}?page=${currentPage - 1}`}
                   className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-white px-3 py-1.5 font-medium shadow-sm hover:shadow transition"
                 >
                   ← Page précédente
@@ -452,7 +441,7 @@ export default async function CityPage({
               )}
               {currentPage < totalPages && (
                 <Link
-                  href={`/france/${city}?page=${currentPage + 1}`}
+                  href={`/france/regions/${slug}?page=${currentPage + 1}`}
                   className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-white px-3 py-1.5 font-medium shadow-sm hover:shadow transition"
                 >
                   Page suivante →
@@ -462,31 +451,6 @@ export default async function CityPage({
           </div>
         )}
 
-        <section className="mt-16 border-t border-black/10 pt-8">
-          <h2 className="text-xl font-semibold mb-2">
-            Autres villes populaires
-          </h2>
-
-          <p className="mb-4 text-sm text-gray-600">
-            Découvrez aussi des tatoueurs dans d&apos;autres villes françaises.
-          </p>
-
-          <div className="flex flex-wrap gap-3">
-            {popularCities
-              .filter((c) => c.slug !== city)
-              .map((c) => (
-              <Link
-                key={c.slug}
-                href={`/france/${c.slug}`}
-                className="px-4 py-2 rounded-lg border border-black/10 text-sm hover:bg-black hover:text-white transition"
-              >
-                Tatoueurs à {c.name}
-              </Link>
-            ))}
-          </div>
-        </section>
-
-        {/* Footer mini */}
         <div className="mt-12 text-xs text-black/45">
           © 2026 TattooCityGuide
         </div>

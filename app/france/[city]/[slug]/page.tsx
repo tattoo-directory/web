@@ -116,8 +116,9 @@ function slugToLabel(slug: string) {
 
 export async function generateStaticParams() {
   const { data: artists } = await supabase
-    .from("artists")
+    .from("artists_with_post_count")
     .select("city_slug, slug")
+    .gte("post_count", 3)
     .eq("country_code", "FR")
     .eq("is_active", true);
 
@@ -141,15 +142,18 @@ export async function generateMetadata({
   const cityName = cityRow?.name ?? city;
 
   const { data: artist } = await supabase
-    .from("artists")
+    .from("artists_with_post_count")
     .select("name, style_slugs")
+    .gte("post_count", 3)
     .eq("country_code", "FR")
     .eq("city_slug", city)
     .eq("slug", slug)
     .eq("is_active", true)
     .single();
 
-  const artistName = artist?.name ?? slug;
+  if (!artist) return notFound();
+
+  const artistName = artist.name ?? slug;
   const styles = (artist?.style_slugs ?? []).slice(0, 4).join(", ");
 
   return {
@@ -177,10 +181,11 @@ export default async function ArtistPage({
   if (!cityRow) return notFound();
 
   const { data: artist, error } = await supabase
-    .from("artists")
+    .from("artists_with_post_count")
     .select(
       "id, name, slug, instagram_handle, instagram_url, phone, website_url, address, bio, style_slugs"
     )
+    .gte("post_count", 3)
     .eq("country_code", "FR")
     .eq("city_slug", city)
     .eq("slug", slug)
@@ -196,6 +201,7 @@ export default async function ArtistPage({
     .from("artist_ig_posts")
     .select("shortcode, ig_post_url, image_path, taken_at")
     .eq("artist_id", artist.id)
+    .eq("hidden", false)
     .order("taken_at", { ascending: false })
     .limit(9);
 

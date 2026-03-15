@@ -15,24 +15,50 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${baseUrl}/france`, lastModified: now },
   ];
 
-  const { data: cities } = await supabase
-    .from("cities")
+  const { data: regions } = await supabase
+    .from("regions")
     .select("slug")
     .eq("country_code", "FR");
 
-  const { data: artists } = await supabase
-    .from("artists")
-    .select("slug, city_slug")
-    .eq("country_code", "FR")
-    .eq("is_active", true);
+  for (const r of regions ?? []) {
+    if (!r.slug) continue;
 
-  for (const c of cities ?? []) {
-    items.push({ url: `${baseUrl}/france/${c.slug}`, lastModified: now });
+    items.push({
+      url: `${baseUrl}/france/regions/${r.slug}`,
+      lastModified: now,
+    });
   }
 
-  for (const a of artists ?? []) {
+  const { data: artists, error } = await supabase
+    .from("artists_with_post_count")
+    .select("slug, city_slug")
+    .gte("post_count", 3);
+
+  if (error) {
+    console.error("Sitemap artists fetch error:", error);
+    return items;
+  }
+
+  const uniqueCitySlugs = [
+    ...new Set(
+      (artists ?? [])
+        .map((a) => a.city_slug)
+        .filter((citySlug): citySlug is string => Boolean(citySlug))
+    ),
+  ];
+
+  for (const citySlug of uniqueCitySlugs) {
     items.push({
-      url: `${baseUrl}/france/${a.city_slug}/${a.slug}`,
+      url: `${baseUrl}/france/${citySlug}`,
+      lastModified: now,
+    });
+  }
+
+  for (const artist of artists ?? []) {
+    if (!artist.city_slug || !artist.slug) continue;
+
+    items.push({
+      url: `${baseUrl}/france/${artist.city_slug}/${artist.slug}`,
       lastModified: now,
     });
   }

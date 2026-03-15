@@ -124,31 +124,6 @@ export default function HomePage() {
       </div>
 
       <div className="relative">
-        {/* Header */}
-        <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-          <Link href="/" className="inline-flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-xl border border-black/10 bg-white shadow-sm">
-              <Image
-                src="/favicon.png"
-                alt="TattooCityGuide"
-                width={20}
-                height={20}
-              />
-            </div>
-            <span className="text-sm font-semibold tracking-tight">
-              TattooCityGuide
-            </span>
-          </Link>
-
-          <Link
-            href="/france"
-            className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-medium shadow-sm transition hover:shadow-md"
-          >
-            Parcourir
-            <ArrowRightIcon className="h-4 w-4" />
-          </Link>
-        </header>
-
         {/* Hero */}
         <section className="mx-auto max-w-6xl px-6 pb-14 pt-10 sm:pt-14">
           <div className="max-w-4xl">
